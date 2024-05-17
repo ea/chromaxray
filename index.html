@@ -1,0 +1,293 @@
+<html>
+
+<head>
+  <script src="js-colormaps/js-colormaps.js"></script>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <!-- Bootstrap core CSS -->
+  <link href="./css/bootstrap.css" rel="stylesheet">
+  <script src="./js/bootstrap.bundle.js"></script>
+
+  <style>
+
+
+  </style>
+
+  <script>
+
+    const img = new Image();
+    var valmap = Array(255);
+    var doPaint = true;
+    var filename = "result.jpg";
+
+    function togglePaint() {
+      doPaint = !doPaint;
+      mapColor();
+    }
+
+    function normalize(v) {
+      var range_min = document.getElementById("range_min").value;
+      var range_max = document.getElementById("range_max").value;
+      return Math.max((v - range_min), 0) / (range_max - range_min);
+    }
+
+    function guestimate_params(ctx) {
+      var guess_factor = 1000;
+      for (var i = 0; i < 256; i++) {
+        valmap[i] = 0;
+      }
+      let data = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height);
+      let px_x = ctx.canvas.width;
+      let px_y = ctx.canvas.height;
+      for (var y = 0; y < px_y; y++) {
+        for (var x = 0; x < px_x; x++) {
+          var px_val = data.data[y * 4 * px_x + x * 4];
+          valmap[px_val] = valmap[px_val] + 1;
+        }
+      }
+      var min_guess = 0;
+      for (var i = 1; i < 256; i++) {
+        if (valmap[i] > guess_factor) {
+          min_guess = i;
+          break;
+        }
+      }
+      var max_guess = 255;
+      for (var i = 255; i > 0; i--) {
+        if (valmap[i] > guess_factor) {
+          max_guess = i;
+          break;
+        }
+      }
+
+      var mid = min_guess + (max_guess - min_guess) / 2
+      document.getElementById("fudge_range").value = 128 - mid;
+      document.getElementById("range_min").value = min_guess;
+      document.getElementById("range_max").value = max_guess;
+    }
+
+    function quantize(num) {
+      var q = document.getElementById("quantize").value;;
+      return Math.round((num + Number.EPSILON) * q) / q
+    }
+
+    function makeMap(name) {
+      var cmap = Array(255);
+      var fudge_range = (1. / 255.) * document.getElementById("fudge_range").value;
+      for (var i = 0; i < 256; i++) {
+        cmap[i] = evaluate_cmap(quantize(Math.max(0, Math.min((normalize(i) + fudge_range), 1))), name, false);
+        if (cmap[i] == NaN) cmap[i] = cmap[i - 1];
+      }
+
+      return cmap;
+    }
+
+    function mapColor() {
+
+      let xx, yy;
+      ctx = document.getElementById("canvas").getContext("2d");
+      //draw original first 
+      ctx.drawImage(img, 0, 0, ctx.canvas.width, ctx.canvas.height);
+      let data = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height);
+      let nData = ctx.createImageData(data);
+      if (doPaint) {
+
+        let px_x = ctx.canvas.width;
+        let px_y = ctx.canvas.height;
+        var cmap = makeMap(document.getElementById("pallete_picker").value);
+
+        let line_y = 4 * px_x;
+
+        for (var i_y = 0; i_y < px_y; i_y++) {
+          for (var i_x = 0; i_x < px_x; i_x++) {
+
+
+            let nv = (0, 0, 0);
+            let cv = data.data[i_y * line_y + i_x * 4];
+            nv = cmap[cv];
+            nData.data[i_y * line_y + i_x * 4] = nv[0];
+            nData.data[i_y * line_y + i_x * 4 + 1] = nv[1];
+            nData.data[i_y * line_y + i_x * 4 + 2] = nv[2];
+            nData.data[i_y * line_y + i_x * 4 + 3] = data.data[i_y * line_y + i_x * 4 + 3];
+
+          }
+        }
+        ctx.putImageData(nData, 0, 0);
+      }
+    }
+
+    function readImage(file) {
+      if (file.type && !file.type.startsWith('image/')) {
+        console.log('File is not an image.', file.type, file);
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.addEventListener('load', (event) => {
+        img.src = event.target.result;
+      });
+      reader.readAsDataURL(file);
+      document.getElementById("fudge_range").value = 0;
+    }
+    function resizeCanvas(width, height) {
+      var canvas = document.getElementById('canvas');
+      canvas.width = width;
+      canvas.height = height;
+    }
+
+    function windowResize() {
+      resizeCanvas(window.innerWidth, img.height / (img.width / window.innerWidth));
+      ctx.drawImage(img, 0, 0, ctx.canvas.width, ctx.canvas.height);
+
+      mapColor();
+    }
+    function onLoad() {
+      const fileSelector = document.getElementById('file-selector');
+      fileSelector.addEventListener('change', (event) => {
+        const fileList = event.target.files;
+        filename = fileList[0].name.replace(/\.[^/.]+$/, "");
+
+        readImage(fileList[0]);
+      });
+
+
+      var pallete_picker = document.getElementById("pallete_picker");
+      for (v in data) {
+        var option = document.createElement("option");
+        option.value = v;
+        option.text = v;
+        pallete_picker.appendChild(option);
+      }
+      pallete_picker.value = "turbo";
+      doImage();
+      window.addEventListener('resize', windowResize, false);
+    }
+
+    function doGuess() {
+      const ctx = document.getElementById("canvas").getContext("2d");
+      ctx.drawImage(img, 0, 0, ctx.canvas.width, ctx.canvas.height);
+
+      guestimate_params(ctx);
+      mapColor();
+    }
+    function doImage() {
+
+      img.src = "result.jpg"; //default image
+
+      img.onload = () => {
+        const ctx = document.getElementById("canvas").getContext("2d");
+        //guestimate parameters on full resolution first
+        resizeCanvas(img.width, img.height);
+        ctx.drawImage(img, 0, 0, ctx.canvas.width, ctx.canvas.height);
+        guestimate_params(ctx);
+        //then resize to fit the viewport
+        resizeCanvas(window.innerWidth, img.height / (img.width / window.innerWidth));
+        ctx.drawImage(img, 0, 0, ctx.canvas.width, ctx.canvas.height);
+
+        mapColor();
+
+      }
+    }
+
+    function doSave() {
+      const ctx = document.getElementById("canvas").getContext("2d");
+      resizeCanvas(img.width, img.height);
+      ctx.drawImage(img, 0, 0, ctx.canvas.width, ctx.canvas.height);
+      mapColor();
+      var image = ctx.canvas.toDataURL("image/png");
+      var an = document.createElement('a');
+
+      an.href = image;
+      an.download = filename + "_pseudocolor.png";
+      an.click();
+      an.remove();
+      resizeCanvas(window.innerWidth, img.height / (img.width / window.innerWidth));
+      ctx.drawImage(img, 0, 0, ctx.canvas.width, ctx.canvas.height);
+
+      mapColor();
+
+    }
+
+  </script>
+</head>
+
+<body onload="onLoad()">
+
+  <div class="container" id="options">
+    <div class="row" id="cont1">
+      <div class="mb-3 col">
+        <input type="file" id="file-selector" class="form-control">
+      </div>
+      <div class="col">
+        <select aria-label="Pallete" class="form-select" id="pallete_picker" onchange="mapColor();"></select>
+      </div>
+      <div class="form-check form-switch col">
+        <label class="form-check-label" for="flexSwitchCheckChecked">Paint</label>
+        <input class="form-check-input" type="checkbox" id="flexSwitchCheckChecked" checked oninput="togglePaint();">
+      </div>
+      <div class="col">
+        <button type="button" class="btn btn-primary" onclick="doSave();">Save</button>
+      </div>
+      <div class="col">
+        <button type="button" class="btn btn-primary" onclick="doGuess();">Guess params</button>
+      </div>
+      <div class="col">
+        <button class="btn btn-primary" type="button" data-bs-toggle="collapse" data-bs-target="#whatisthis" aria-expanded="false" aria-controls="collapseExample">
+          What is this?
+        </button>
+    </div>
+    </div>
+    <div class="collapse row" id="whatisthis">
+      <div class="card card-body">
+<h3>Pseudocolor image augmentation utility. </h3>
+
+<p>As I was doing X-Ray imaging of some electronics, I wanted to test the idea of adding false color to monochrome images to see if it would enhance visibility and readability. Turns out it's actually useful in some cases!</p>
+<p>Opened images are <b>not uploaded</b>. All processing done <b>client-side</b></p>
+<p>To showcase the tool, default is an X-ray of an <a href="https://github.com/ea/srxe_cc1101">SRXE</a>. Toggle <b>color</b> to see the original.</p>
+<p>This simple tool takes an image, runs a heuristic on it's pixel values and applies a color map. Color map can be further manipulated by changing the sliders. 
+  <b>Shift</b> moves the center of the color map which can help zero in on the features of interest.<b>Quantize</b> equalizes nearby color values which can be handy in some color maps. 
+  Using <b>Min</b> and <b>Max</b> sliders you can control the range of the color map that's applied. Play around with these and see if they lead to a better image. </p>
+  <p>You can also change the color map itself. All of the ones in the drop down list come from <a href="https://github.com/timothygebhard/js-colormaps">js-colormaps</a> library which in turn comes from Python's matplotlib. Default color map is <a href="https://research.google/blog/turbo-an-improved-rainbow-colormap-for-visualization/">turbo</a> which was specifically designed with regards to human vision.</p>
+<p><b>Guess parameters</b> is run by default when you open a new image, but can be used to reset all the sliders back if you go too far.</p>      
+<p>Finally, you can <b>Save</b> the augmented image which should render it in the same resolution as the original and make it into a download.</p>      
+
+<p> This whole thing started when a <a href="https://twitter.com/travisgoodspeed">neighbor</a> lent me his X-Ray machine to have some fun. You can read more about that work <a href="https://github.com/ea/film_xrays">here</a>.
+</div>
+    </div>
+    <div class="row">
+      <div class="col">
+        <label class="form-label" for="fudge_range">Shift</label>
+        <input class="form-range" type="range" min="-127" max="128" value="0" class="slider" id="fudge_range"
+          oninput="mapColor();">
+      </div>
+      <div class="col">
+
+        <label class="form-label" for="quantize">Quantize</label>
+        <input class="form-range" type="range" min="0" max="100" value="100" class="slider" id="quantize"
+          oninput="mapColor();">
+      </div>
+    </div>
+    <div class="row">
+      <div class="col">
+
+        <label class="form-label" for="range_min">Min</label>
+        <input class="form-range" type="range" min="0" max="255" value="0" class="slider" id="range_min"
+          oninput="mapColor();">
+      </div>
+      <div class="col">
+
+        <label class="form-label" for="range_max">Max</label>
+        <input class="form-range" type="range" min="0" max="255" value="255" class="slider" id="range_max"
+          oninput="mapColor();">
+      </div>
+    </div>
+  </div>
+  <canvas id="canvas"></canvas>
+
+
+
+</body>
+
+</html>
