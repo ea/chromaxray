@@ -20,6 +20,7 @@
     const img = new Image();
     var valmap = Array(255);
     var doPaint = true;
+    var doCLAHE = false;
     var filename = "result.jpg";
 
     function togglePaint() {
@@ -27,10 +28,140 @@
       mapColor();
     }
 
+    function toggleCLAHE() {
+      doCLAHE = !doCLAHE;
+      mapColor();
+    }
+
     function normalize(v) {
       var range_min = document.getElementById("range_min").value;
       var range_max = document.getElementById("range_max").value;
       return Math.max((v - range_min), 0) / (range_max - range_min);
+    }
+
+    // CLAHE implementation
+    function applyCLAHE(imageData, clipLimit = 2.0, gridWidth = 48, gridHeight = 48) {
+      var width = imageData.width;
+      var height = imageData.height;
+      var data = imageData.data;
+
+      // Convert RGB to grayscale using luminance weights
+      var gray = new Uint8Array(width * height);
+      for (var i = 0; i < height; i++) {
+        for (var j = 0; j < width; j++) {
+          var idx = (i * width + j) * 4;
+          gray[i * width + j] = Math.round(
+            0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2]
+          );
+        }
+      }
+
+      // CLAHE parameters
+      var tileWidth = Math.floor(width / gridWidth);
+      var tileHeight = Math.floor(height / gridHeight);
+      var bins = 256;
+      var clipLimitVal = Math.max(1, clipLimit * (tileWidth * tileHeight) / bins);
+
+      // Build histogram for each tile
+      var tilesX = Math.ceil(width / tileWidth);
+      var tilesY = Math.ceil(height / tileHeight);
+      var histograms = [];
+
+      for (var ty = 0; ty < tilesY; ty++) {
+        histograms[ty] = [];
+        for (var tx = 0; tx < tilesX; tx++) {
+          var hist = new Array(bins).fill(0);
+          var startY = ty * tileHeight;
+          var endY = Math.min(startY + tileHeight, height);
+          var startX = tx * tileWidth;
+          var endX = Math.min(startX + tileWidth, width);
+
+          for (var y = startY; y < endY; y++) {
+            for (var x = startX; x < endX; x++) {
+              var val = gray[y * width + x];
+              hist[val]++;
+            }
+          }
+
+          // Clip histogram
+          var total = 0;
+          for (var i = 0; i < bins; i++) total += hist[i];
+          var excess = 0;
+          for (var i = 0; i < bins; i++) {
+            if (hist[i] > clipLimitVal) {
+              excess += hist[i] - clipLimitVal;
+              hist[i] = clipLimitVal;
+            }
+          }
+          var redistribution = excess / bins;
+          for (var i = 0; i < bins; i++) {
+            hist[i] += redistribution;
+          }
+
+          // Build CDF
+          var cdf = new Array(bins).fill(0);
+          cdf[0] = hist[0];
+          for (var i = 1; i < bins; i++) {
+            cdf[i] = cdf[i - 1] + hist[i];
+          }
+          // Find min and max CDF values
+          var minCDF = cdf[0];
+          var maxCDF = cdf[0];
+          for (var i = 1; i < bins; i++) {
+            if (cdf[i] < minCDF) minCDF = cdf[i];
+            if (cdf[i] > maxCDF) maxCDF = cdf[i];
+          }
+          // Normalize CDF to range [0, bins-1]
+          var cdfRange = maxCDF - minCDF;
+          if (cdfRange > 0) {
+            var scale = (bins - 1) / cdfRange;
+            for (var i = 0; i < bins; i++) {
+              cdf[i] = Math.round((cdf[i] - minCDF) * scale);
+            }
+          } else {
+            // All pixels have same value, no enhancement needed
+            for (var i = 0; i < bins; i++) {
+              cdf[i] = i;
+            }
+          }
+
+          histograms[ty][tx] = cdf;
+        }
+      }
+
+      // Apply CLAHE with bilinear interpolation
+      var result = new Uint8Array(width * height);
+      for (var ty = 0; ty < tilesY; ty++) {
+        for (var tx = 0; tx < tilesX; tx++) {
+          var cdf = histograms[ty][tx];
+          var startY = ty * tileHeight;
+          var endY = Math.min(startY + tileHeight, height);
+          var startX = tx * tileWidth;
+          var endX = Math.min(startX + tileWidth, width);
+
+          for (var y = startY; y < endY; y++) {
+            for (var x = startX; x < endX; x++) {
+              var val = gray[y * width + x];
+              result[y * width + x] = cdf[val];
+            }
+          }
+        }
+      }
+
+      // Copy result back to imageData, preserving original RGB ratios
+      for (var i = 0; i < height; i++) {
+        for (var j = 0; j < width; j++) {
+          var idx = (i * width + j) * 4;
+          var origGray = gray[i * width + j];
+          var newGray = result[i * width + j];
+
+          // Apply CLAHE result to all channels
+          data[idx] = newGray;
+          data[idx + 1] = newGray;
+          data[idx + 2] = newGray;
+          // Alpha channel unchanged
+        }
+      }
     }
 
     function guestimate_params(ctx) {
@@ -88,11 +219,25 @@
 
       let xx, yy;
       ctx = document.getElementById("canvas").getContext("2d");
-      //draw original first 
+
+      // Ensure image is loaded and canvas is properly sized
+      if (!img.complete || img.naturalWidth === 0) {
+        return;
+      }
+
+      //draw original first
       ctx.drawImage(img, 0, 0, ctx.canvas.width, ctx.canvas.height);
       let data = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height);
-      let nData = ctx.createImageData(data);
+
+      // Apply CLAHE if enabled (before colorization)
+      if (doCLAHE) {
+        var dim = document.getElementById("clahe_tiles").value;
+
+        applyCLAHE(data, 2.0,dim,dim );
+      }
+
       if (doPaint) {
+        let nData = ctx.createImageData(data);
 
         let px_x = ctx.canvas.width;
         let px_y = ctx.canvas.height;
@@ -115,6 +260,9 @@
           }
         }
         ctx.putImageData(nData, 0, 0);
+      } else {
+        // When not painting, put the CLAHE-modified data back (grayscale)
+        ctx.putImageData(data, 0, 0);
       }
     }
 
@@ -227,6 +375,10 @@
         <label class="form-check-label" for="flexSwitchCheckChecked">Paint</label>
         <input class="form-check-input" type="checkbox" id="flexSwitchCheckChecked" checked oninput="togglePaint();">
       </div>
+      <div class="form-check form-switch col">
+        <label class="form-check-label" for="claheSwitch">CLAHE</label>
+        <input class="form-check-input" type="checkbox" id="claheSwitch" oninput="toggleCLAHE();">
+      </div>
       <div class="col">
         <button type="button" class="btn btn-primary" onclick="doSave();">Save</button>
       </div>
@@ -263,7 +415,9 @@
           oninput="mapColor();">
       </div>
       <div class="col">
-
+        <label class="form-label" for="clahe_tiles">CLAHE tiles</label>
+        <input class="form-range" type="range" min="0" max="64" value="4" class="slider" id="clahe_tiles"
+          oninput="mapColor();">
         <label class="form-label" for="quantize">Quantize</label>
         <input class="form-range" type="range" min="0" max="100" value="100" class="slider" id="quantize"
           oninput="mapColor();">
@@ -281,6 +435,7 @@
         <label class="form-label" for="range_max">Max</label>
         <input class="form-range" type="range" min="0" max="255" value="255" class="slider" id="range_max"
           oninput="mapColor();">
+
       </div>
     </div>
   </div>
